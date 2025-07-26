@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>DB Normalizer Pro</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .result-card {
+            margin-top: 15px;
+            border-left: 4px solid #0d6efd;
+        }
+        .success { color: #198754; }
+        .violation { color: #dc3545; }
+    </style>
+</head>
+
+<body class="bg-light">
+    <div class="container py-4">
+        <header class="pb-3 mb-4 border-bottom">
+            <h1 class="text-primary">DB Normalizer</h1>
+        </header>
+
+        <div class="row g-4">
+            <div class="col-md-6">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">Candidate Key Finder</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="keysForm" class="mb-3">
+                            <div class="mb-3">
+                                <label class="form-label">Schema (comma-separated)</label>
+                                <input type="text" class="form-control" id="schemaInput" value="A,B,C" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Functional Dependencies (e.g., A->B,B->C)</label>
+                                <input type="text" class="form-control" id="fdInput" value="AB->C,C->B" required>
+                            </div>
+                            <button type="button" class="btn btn-primary" id="findKeysBtn">Find Keys</button>
+                        </form>
+                        <div id="keysResult" class="result-card p-3" style="display: none;">
+                            <h5>Candidate Keys:</h5>
+                            <div class="alert alert-info" id="keysOutput"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">Attribute Closure Calculator</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="closureForm" class="mb-3">
+                            <div class="mb-3">
+                                <label class="form-label">Attributes for Closure</label>
+                                <input type="text" class="form-control" id="closureInput" value="AB" required>
+                            </div>
+                            <button type="button" class="btn btn-success" id="findClosureBtn">Calculate Closure</button>
+                        </form>
+                        <div id="closureResult" class="result-card p-3" style="display: none;">
+                            <h5>Closure:</h5>
+                            <div class="alert alert-success" id="closureOutput"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+           <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-warning">
+                        <h5 class="mb-0">Normalization Analysis</h5>
+                    </div>
+                    <div class="card-body">
+                        <button type="button" class="btn btn-warning mb-3" id="normalizeBtn">Analyze & Normalize</button>
+                        
+                        <div id="normResults" style="display: none;">
+                            <div class="accordion" id="normAccordion"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        
+    </div>
+
+   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+         function parseFDs(depsStr) {
+            return depsStr.split(',').map(dep => {
+                const [left, right] = dep.split('->');
+                return { left: left.trim(), right: right.trim() };
+            });
+        }
+
+        function isSubset(str, set) {
+            return [...str].every(char => set.has(char));
+        }
+
+        function calcClosure(attrs, deps) {
+            let closure = new Set([...attrs]);
+            let changed = true;
+            
+            while (changed) {
+                changed = false;
+                for (const dep of deps) {
+                    if (isSubset(dep.left, closure)) {
+                        for (const attr of dep.right) {
+                            if (!closure.has(attr)) {
+                                closure.add(attr);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            return [...closure].sort().join('');
+        }
+
+        function getCombinations(arr, k) {
+            const result = [];
+            
+            function generate(start, combo) {
+                if (combo.length === k) {
+                    result.push([...combo]);
+                    return;
+                }
+                
+                for (let i = start; i < arr.length; i++) {
+                    combo.push(arr[i]);
+                    generate(i + 1, combo);
+                    combo.pop();
+                }
+            }
+            
+            generate(0, []);
+            return result.map(c => c.join(''));
+        }
+
+        function findCandidateKeys(deps, allAttrs) {
+            const keys = [];
+            const attrsArray = [...allAttrs];
+            
+            for (let i = 1; i <= attrsArray.length; i++) {
+                const combos = getCombinations(attrsArray, i);
+                
+                for (const combo of combos) {
+                    if (keys.some(key => isSubset(key, new Set(combo)))) continue;
+                    
+                    const closure = calcClosure(combo, deps);
+                    if (closure.length === attrsArray.length) {
+                        keys.push(combo);
+                    }
+                }
+            }
+            
+            return keys;
+        }
+
+       function check2NF(deps, candKeys, allAttrs) {
+            const primeAttrs = new Set();
+            candKeys.forEach(key => [...key].forEach(attr => primeAttrs.add(attr)));
+            
+            for (const dep of deps) {
+                if ([...dep.right].some(attr => !primeAttrs.has(attr))) {
+                    for (const key of candKeys) {
+                        if (dep.left.length < key.length && isSubset(dep.left, new Set(key))) {
+                            return {
+                                normalized: false,
+                                violation: `Partial dependency: ${dep.left} -> ${dep.right} (part of key ${key})`
+                            };
+                        }
+                    }
+                }
+            }
+            
+            return { normalized: true };
+        }
+
+        function check3NF(deps, candKeys, allAttrs) {
+           const primeAttrs = new Set();
+            candKeys.forEach(key => [...key].forEach(attr => primeAttrs.add(attr)));
+            
+            for (const dep of deps) {
+                const isSuperkey = candKeys.some(key => isSubset(key, new Set(dep.left)));
+                if (isSuperkey) continue;
+                
+                if ([...dep.right].some(attr => !primeAttrs.has(attr))) {
+                    return {
+                        normalized: false,
+                        violation: `Transitive dependency: ${dep.left} -> ${dep.right}`
+                    };
+                }
+            }
+            
+            return { normalized: true };
+        }
+
+        function checkBCNF(deps, candKeys) {
+            for (const dep of deps) {
+                const isSuperkey = candKeys.some(key => isSubset(key, new Set(dep.left)));
+                if (!isSuperkey) {
+                    return {
+                        normalized: false,
+                        violation: `Non-superkey determinant: ${dep.left} -> ${dep.right}`
+                    };
+                }
+            }
+            
+            return { normalized: true };
+        }
+
+       function decomposeTo2NF(schema, deps, candKeys) {
+            const relations = [];
+            const decompositionSteps = [];
+            const schemaAttrs = schema.split(',').map(a => a.trim());
+            
+            const primeAttrs = new Set();
+            candKeys.forEach(key => [...key].forEach(attr => primeAttrs.add(attr)));
+            
+            for (const dep of deps) {
+                if ([...dep.right].some(attr => !primeAttrs.has(attr))) {
+                    for (const key of candKeys) {
+                        if (dep.left.length < key.length && isSubset(dep.left, new Set(key))) {
+                            const newRelAttrs = [...new Set([...dep.left, ...dep.right])];
+                            const newRel = {
+                                name: `R${relations.length + 1}`,
+                                attrs: newRelAttrs.join(','),
+                                fds: [`${dep.left}->${dep.right}`]
+                            };
+                            relations.push(newRel);
+                            
+                            decompositionSteps.push(
+                                `Created ${newRel.name}(${newRel.attrs}) for FD: ${dep.left}->${dep.right}`
+                            );
+                            
+                            const remaining = schemaAttrs.filter(a => 
+                                !dep.right.includes(a) || dep.left.includes(a) || [...key].includes(a)
+                            );
+                            
+                            if (remaining.length > 0) {
+                                relations.push({
+                                    name: `R${relations.length + 1}`,
+                                    attrs: remaining.join(','),
+                                    fds: []
+                                });
+                                
+                                decompositionSteps.push(
+                                    `Created relation with remaining attributes: ${remaining.join(',')}`
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return { relations, steps: decompositionSteps };
+        }
+
+        function decomposeTo3NF(schema, deps, candKeys) {
+            const relations = [];
+            const decompositionSteps = [];
+            const schemaAttrs = schema.split(',').map(a => a.trim());
+            
+            const primeAttrs = new Set();
+            candKeys.forEach(key => [...key].forEach(attr => primeAttrs.add(attr)));
+            
+            for (const dep of deps) {
+                const isSuperkey = candKeys.some(key => isSubset(key, new Set(dep.left)));
+                if (isSuperkey) continue;
+                
+                if ([...dep.right].some(attr => !primeAttrs.has(attr))) {
+                    const newRelAttrs = [...new Set([...dep.left, ...dep.right])];
+                    const newRel = {
+                        name: `R${relations.length + 1}`,
+                        attrs: newRelAttrs.join(','),
+                        fds: [`${dep.left}->${dep.right}`]
+                    };
+                    relations.push(newRel);
+                    
+                    decompositionSteps.push(
+                        `Created ${newRel.name}(${newRel.attrs}) for transitive FD: ${dep.left}->${dep.right}`
+                    );
+                    
+                    const remaining = schemaAttrs.filter(a => 
+                        !dep.right.includes(a) || dep.left.includes(a)
+                    );
+                    
+                    if (remaining.length > 0) {
+                        relations.push({
+                            name: `R${relations.length + 1}`,
+                            attrs: remaining.join(','),
+                            fds: []
+                        });
+                        
+                        decompositionSteps.push(
+                            `Created relation with remaining attributes: ${remaining.join(',')}`
+                        );
+                    }
+                }
+            }
+            
+            return { relations, steps: decompositionSteps };
+        }
+
+        function decomposeToBCNF(schema, deps, candKeys) {
+            const relations = [];
+            const decompositionSteps = [];
+            const schemaAttrs = schema.split(',').map(a => a.trim());
+            
+            for (const dep of deps) {
+                const isSuperkey = candKeys.some(key => isSubset(key, new Set(dep.left)));
+                if (!isSuperkey) {
+                    const r1Attrs = [...new Set([...dep.left, ...dep.right])];
+                    const rel1 = {
+                        name: `R${relations.length + 1}`,
+                        attrs: r1Attrs.join(','),
+                        fds: [`${dep.left}->${dep.right}`]
+                    };
+                    relations.push(rel1);
+                    
+                    decompositionSteps.push(
+                        `Created ${rel1.name}(${rel1.attrs}) for non-superkey FD: ${dep.left}->${dep.right}`
+                    );
+                    
+                    const r2Attrs = schemaAttrs.filter(a => 
+                        !dep.right.includes(a) || dep.left.includes(a)
+                    );
+                    
+                    const rel2 = {
+                        name: `R${relations.length + 1}`,
+                        attrs: r2Attrs.join(','),
+                        fds: []
+                    };
+                    relations.push(rel2);
+                    
+                    decompositionSteps.push(
+                        `Created ${rel2.name}(${rel2.attrs}) with remaining attributes`
+                    );
+                    
+                    break; 
+                }
+            }
+            
+            return { relations, steps: decompositionSteps };
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('findKeysBtn').addEventListener('click', function() {
+                const schema = document.getElementById('schemaInput').value;
+                const fdStr = document.getElementById('fdInput').value;
+                
+                const schemaAttrs = new Set(schema.split(',').map(a => a.trim()));
+                const deps = parseFDs(fdStr);
+                
+                const candidateKeys = findCandidateKeys(deps, schemaAttrs);
+                
+                document.getElementById('keysOutput').textContent = candidateKeys.join(', ');
+                document.getElementById('keysResult').style.display = 'block';
+                
+               if (candidateKeys.length > 0) {
+                    document.getElementById('closureInput').value = candidateKeys[0];
+                }
+            });
+            
+            document.getElementById('findClosureBtn').addEventListener('click', function() {
+                const attrs = document.getElementById('closureInput').value;
+                const fdStr = document.getElementById('fdInput').value;
+                
+                const deps = parseFDs(fdStr);
+                const closure = calcClosure(attrs, deps);
+                
+                document.getElementById('closureOutput').textContent = closure;
+                document.getElementById('closureResult').style.display = 'block';
+            });
+            
+            document.getElementById('normalizeBtn').addEventListener('click', function() {
+                const schema = document.getElementById('schemaInput').value;
+                const fdStr = document.getElementById('fdInput').value;
+                
+                const schemaAttrs = new Set(schema.split(',').map(a => a.trim()));
+                const deps = parseFDs(fdStr);
+                
+                const candidateKeys = findCandidateKeys(deps, schemaAttrs);
+                
+               const results = [
+                    {
+                        name: '1NF',
+                        title: 'First Normal Form',
+                        check: { normalized: true, message: "All attributes assumed atomic" },
+                        decomposition: { relations: [], steps: [] }
+                    },
+                    {
+                        name: '2NF',
+                        title: 'Second Normal Form',
+                        check: check2NF(deps, candidateKeys, schemaAttrs),
+                        decomposition: function() {
+                            return this.check.normalized ? 
+                                { relations: [], steps: [] } : 
+                                decomposeTo2NF(schema, deps, candidateKeys);
+                        }
+                    },
+                    {
+                        name: '3NF',
+                        title: 'Third Normal Form',
+                        check: check3NF(deps, candidateKeys, schemaAttrs),
+                        decomposition: function() {
+                            return this.check.normalized ? 
+                                { relations: [], steps: [] } : 
+                                decomposeTo3NF(schema, deps, candidateKeys);
+                        }
+                    },
+                    {
+                        name: 'BCNF',
+                        title: 'Boyce-Codd Normal Form',
+                        check: checkBCNF(deps, candidateKeys),
+                        decomposition: function() {
+                            return this.check.normalized ? 
+                                { relations: [], steps: [] } : 
+                                decomposeToBCNF(schema, deps, candidateKeys);
+                        }
+                    }
+                ];
+                
+                const accordion = document.getElementById('normAccordion');
+                accordion.innerHTML = '';
+                
+                results.forEach((result, index) => {
+                    const decomp = typeof result.decomposition === 'function' ? 
+                        result.decomposition() : result.decomposition;
+                    
+                    const accordionItem = document.createElement('div');
+                    accordionItem.className = 'accordion-item';
+                    accordionItem.innerHTML = `
+                        <h2 class="accordion-header">
+                            <button class="accordion-button ${index > 0 ? 'collapsed' : ''}" type="button" 
+                                    data-bs-toggle="collapse" data-bs-target="#collapse${result.name}">
+                                ${result.title} 
+                                <span class="badge ms-2 ${result.check.normalized ? 'bg-success' : 'bg-danger'}">
+                                    ${result.check.normalized ? 'Satisfied' : 'Violated'}
+                                </span>
+                            </button>
+                        </h2>
+                        <div id="collapse${result.name}" class="accordion-collapse collapse ${index === 0 ? 'show' : ''}" 
+                             data-bs-parent="#normAccordion">
+                            <div class="accordion-body">
+                                <p class="${result.check.normalized ? 'success' : 'violation'}">
+                                    ${result.check.normalized ? 
+                                        '✓ ' + (result.check.message || `Relation is in ${result.name}`) : 
+                                        '✗ ' + (result.check.violation || `Relation is not in ${result.name}`)}
+                                </p>
+                                ${decomp.steps.length > 0 ? `
+                                    <div class="card mt-3">
+                                        <div class="card-header">Decomposition</div>
+                                        <div class="card-body">
+                                            <h6>Steps:</h6>
+                                            <ol>
+                                                ${decomp.steps.map(step => `<li>${step}</li>`).join('')}
+                                            </ol>
+                                            ${decomp.relations.length > 0 ? `
+                                                <h6>Resulting Relations:</h6>
+                                                <ul>
+                                                    ${decomp.relations.map(rel => 
+                                                        `<li><strong>${rel.name}</strong>(${rel.attrs})${
+                                                            rel.fds.length > 0 ? 
+                                                            ' with FDs: ' + rel.fds.join(', ') : ''
+                                                        }</li>`
+                                                    ).join('')}
+                                                </ul>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                    
+                    accordion.appendChild(accordionItem);
+                });
+                
+                document.getElementById('normResults').style.display = 'block';
+            });
+        });
+    </script>
+</body>
+</html>
